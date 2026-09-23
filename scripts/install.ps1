@@ -1,9 +1,10 @@
-# Both hosts share dsb/dsv; -Target selects which skills to install or uninstall.
+# Select exactly one host for each install/update/uninstall operation.
 param(
-    [ValidateSet('Both', 'Claude', 'Codex')][string]$Target = 'Both',
+    [ValidateSet('Claude', 'Codex')][string]$Target,
     [switch]$Uninstall
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Target) { throw 'Specify -Target Claude or -Target Codex. No default host is installed or uninstalled.' }
 $Repo = Split-Path -Parent $PSScriptRoot
 $PkgName = 'claude-deepseek-bridge'
 $SkillsSrc = Join-Path $Repo 'skill'
@@ -13,7 +14,7 @@ $Clients = @{
     Claude = @{ Root = (Join-Path $env:USERPROFILE '.claude\skills'); Manifest = (Join-Path $StateDir 'installed-skills.txt') }
     Codex = @{ Root = (Join-Path $env:USERPROFILE '.agents\skills'); Manifest = (Join-Path $StateDir 'installed-skills-codex.txt') }
 }
-$Selected = if ($Target -eq 'Both') { @('Claude', 'Codex') } else { @($Target) }
+$Selected = @($Target)
 $script:changed = 0
 function Say($tag, $msg, $color) { Write-Host ('  [{0}] ' -f $tag) -ForegroundColor $color -NoNewline; Write-Host $msg }
 function Ok($msg) { Say ' ok ' $msg 'DarkGray' }

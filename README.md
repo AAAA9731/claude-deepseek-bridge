@@ -44,51 +44,77 @@
 
 ## 安装
 
-克隆仓库后，**双击 `install.cmd`**，默认同时安装到 Claude Code 和 Codex。也可以在 PowerShell 里选择宿主：
+按你使用的宿主选择对应的安装方式。双击 `install.cmd` 会显示选择菜单，每次只安装所选宿主；PowerShell 脚本必须显式指定 `-Target`。
+
+### Claude Code
 
 ```powershell
-.\scripts\install.ps1                          # 安装 / 更新两个宿主（-Target Both）
-.\scripts\install.ps1 -Target Claude           # 只安装 / 更新 Claude Code
-.\scripts\install.ps1 -Target Codex            # 只安装 / 更新 Codex
-.\scripts\install.ps1 -Uninstall -Target Codex # 只卸载 Codex 的副本
-.\scripts\install.ps1 -Uninstall               # 卸载两个宿主和共享命令
+.\scripts\install.ps1 -Target Claude
 ```
 
-`git pull` 后重新运行安装脚本即可更新。脚本比较文件内容，只同步有变化的部分：
+skill 安装到 `~/.claude/skills/`。更新时使用同一条命令，卸载时运行：
+
+```powershell
+.\scripts\install.ps1 -Target Claude -Uninstall
+```
+
+### Codex
+
+```powershell
+.\scripts\install.ps1 -Target Codex
+```
+
+skill 安装到 `~/.agents/skills/`（[官方 skill 文档](https://learn.chatgpt.com/docs/build-skills)）。更新时使用同一条命令，卸载时运行：
+
+```powershell
+.\scripts\install.ps1 -Target Codex -Uninstall
+```
+
+需要两个宿主时，分别执行两条安装命令。安装和卸载都不会替你选择另一个宿主。
+
+### 安装行为
+
+`git pull` 后重新运行对应宿主的安装命令即可更新。脚本比较文件内容，只同步有变化的部分：
 
 1. 检查依赖：Node ≥ 23.8、npm、dsh。
 2. 把 `skill/` 下的两个 skill 同步到所选宿主目录，并清理本项目此前安装、如今已删除或改名的 skill。
 3. 用 `npm link` 提供全局 `dsv` 和 `dsb` 命令，直接指向本仓库，所以改代码立即生效。
 4. 自检。
 
-| 宿主 | 用户级 skill 安装位置 |
-|---|---|
-| Claude Code | `~/.claude/skills/` |
-| Codex | `~/.agents/skills/`（[官方 skill 文档](https://learn.chatgpt.com/docs/build-skills)） |
-
 安装后重新打开宿主会话，让它发现新增的 skill。覆盖或删除托管文件前，脚本先备份到 `~/.claude-deepseek-bridge/backups/`。只卸载一个宿主时，只要另一个宿主仍有本项目安装的 skill，就保留共享的 `dsb` / `dsv` 命令。**`~/.dsh/patches/` 中的 MCP 配置不随安装或卸载改动。**
 
 ### Agent 安装说明
 
-可以把下面这段话发给 Claude Code 或 Codex，让它完成安装：
+选择对应的提示词发给 agent，让它完成安装。
 
-> 请按 README 的 Agent 安装说明安装 https://github.com/AAAA9731/claude-deepseek-bridge ，默认同时支持 Claude Code 和 Codex，使用持久目录，保留已有配置，并完成不调用付费模型的安装检查。
+**安装到 Claude Code：**
 
-给执行安装的 agent：用户明确要求安装本仓库后，按以下步骤完成安装；用户指定了宿主就使用 `Claude` 或 `Codex`，未指定时使用 `Both`。
+> 请按 README 的 Agent 安装说明，将 https://github.com/AAAA9731/claude-deepseek-bridge 安装到 Claude Code，保留已有配置，并完成不调用付费模型的安装检查。
+
+**安装到 Codex：**
+
+> 请按 README 的 Agent 安装说明，将 https://github.com/AAAA9731/claude-deepseek-bridge 安装到 Codex，保留已有配置，并完成不调用付费模型的安装检查。
+
+给执行安装的 agent：用户明确要求安装本仓库后，只安装到用户指定的宿主。用户只贴链接并要求安装、未指定宿主时，使用当前执行安装的宿主；无法确定当前宿主时再询问。不要自动安装到其他宿主。只有用户明确要求两者时，才分别执行两条安装命令。
 
 1. 阅读本 README 和 `scripts/install.ps1`，确认安装范围。此脚本面向本机 Windows；不要直接套用到 Linux、WSL 或云端环境。使用宿主正常的权限申请机制，不修改沙箱或组织策略。
 2. 选择持久目录，例如 `~/Documents/claude-deepseek-bridge`。全局命令通过 `npm link` 指向此目录，安装后不能删除或移动它。目录尚不存在时，从下方的确切仓库地址克隆；已有目录时先确认它是本仓库的克隆，检查 `git status`，仅在不会覆盖本地工作时 `git pull --ff-only`。保留未提交修改和分叉历史，不执行强制重置；同名目录属于其他项目时另选持久目录。
 3. 确认 Git、Node.js ≥ 23.8 和 npm 可用。只在缺少 dsh 时执行 `npm i -g @deepseek-ai/dsh`；保留已有 dsh 配置和凭据。鉴权未完成时说明还需在本机登录或配置，不要求用户把 key 粘贴到对话中。
-4. 从确认过的目录执行安装脚本，按所选宿主设置 `-Target`。直接运行 PowerShell 脚本，避免 `install.cmd` 的交互暂停。下面示例适用于该持久目录尚不存在的首次安装：
+4. 从确认过的目录执行安装脚本。直接运行 PowerShell 脚本，避免 `install.cmd` 的交互选择和暂停。首次安装可先克隆到尚不存在的持久目录：
 
 ```powershell
 $bridgeRepo = Join-Path $HOME 'Documents/claude-deepseek-bridge'
 git clone https://github.com/AAAA9731/claude-deepseek-bridge.git $bridgeRepo
-# 阅读克隆后的 README.md 和 scripts/install.ps1，再执行：
-powershell -NoProfile -ExecutionPolicy Bypass -File "$bridgeRepo/scripts/install.ps1" -Target Both
 ```
 
-5. 检查所选宿主目录中都存在 `deepseek-delegate/SKILL.md` 和 `dsh-mcp/SKILL.md`，运行 `dsb --help` 和 `dsv ls 1`。没有历史会话是正常情况；检查过程不启动真实模型。命令暂未出现在 PATH 时检查 npm 全局路径并重新打开终端，不重复安装或发起付费调用来验证。
+阅读克隆后的 README 和安装脚本，再执行所选宿主对应的命令：
+
+| 安装目标 | 命令 |
+|---|---|
+| Claude Code | `powershell -NoProfile -ExecutionPolicy Bypass -File "$bridgeRepo/scripts/install.ps1" -Target Claude` |
+| Codex | `powershell -NoProfile -ExecutionPolicy Bypass -File "$bridgeRepo/scripts/install.ps1" -Target Codex` |
+
+5. 检查所选宿主目录中存在 `deepseek-delegate/SKILL.md` 和 `dsh-mcp/SKILL.md`，运行 `dsb --help` 和 `dsv ls 1`。没有历史会话是正常情况；检查过程不启动真实模型。命令暂未出现在 PATH 时检查 npm 全局路径并重新打开终端，不重复安装或发起付费调用来验证。
 6. 汇报实际安装目录、所选宿主、检查结果，以及尚缺的依赖或鉴权。提醒用户重开会话以发现 skill。本项目无需注册新的 MCP server，也无需新增 OpenAI API key。
 
 ## 使用
