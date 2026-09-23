@@ -108,7 +108,7 @@ TUI 操作：
 
 ## 许可证
 
-Copyright (C) 2026 XiaoNetwork-Astral
+Copyright (C) 2026 AAAA9731
 
 本项目以 [GNU Lesser General Public License v2.1](LICENSE)（LGPL-2.1）发布。
 

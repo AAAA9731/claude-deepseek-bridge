@@ -6,7 +6,7 @@
   "license": "LGPL-2.1-only",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/XiaoNetwork-Astral/claude-deepseek-bridge.git"
+    "url": "git+https://github.com/AAAA9731/claude-deepseek-bridge.git"
   },
   "type": "module",
   "bin": {
