@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import zlib from 'node:zlib';
+import { decodeFrom, sessionState, collectUsage } from '../lib/sessions.mjs';
 
 const ROOT = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'sessions');
 const argv = process.argv.slice(2);
@@ -77,29 +77,6 @@ const dur = ms => {
 };
 
 // ── session files ──────────────────────────────────────────────────────────
-const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-
-// The file is a concatenation of zstd frames. Decode frames from `start`; returns events and the offset after the last complete frame.
-function decodeFrom(buf, start = 0) {
-  const cands = [];
-  for (let i = buf.indexOf(MAGIC, start); i !== -1; i = buf.indexOf(MAGIC, i + 1)) cands.push(i);
-  cands.push(buf.length);
-  const events = [];
-  let end = start, i = 0;
-  while (i < cands.length - 1) {
-    let ok = false;
-    for (let j = i + 1; j < cands.length; j++) {
-      try {
-        const text = zlib.zstdDecompressSync(buf.subarray(cands[i], cands[j])).toString('utf8');
-        for (const line of text.split('\n')) if (line.trim()) try { events.push(JSON.parse(line)); } catch {}
-        end = cands[j]; i = j; ok = true; break;
-      } catch {}
-    }
-    if (!ok) break; // incomplete trailing frame (still being written)
-  }
-  return { events, end };
-}
-
 function listSessions() {
   const out = [];
   if (!fs.existsSync(ROOT)) return out;
@@ -129,15 +106,14 @@ function summarize(s, events = decodeFrom(fs.readFileSync(s.file)).events) {
     else if (e.type === 'tool/call') tools++;
     else if (e.type === 'tool/result' && e.data?.message?.content?.some(p => p.isError)) errors++;
   }
-  const state = open > 0 ? (Date.now() - s.mtime < 5 * 60e3 ? 'running' : 'stalled')
-    : lastEnd === 'completed' ? 'done' : (lastEnd || 'empty');
-  return { ...s, cwd, title: title || prompt, prompt, created, last, state, tools, errors };
+  const state = sessionState(open, lastEnd, s.mtime);
+  return { ...s, cwd, title: title || prompt, prompt, created, last, state, tools, errors, usage: collectUsage(events) };
 }
 
 const BADGE = {
-  running: () => yellow('● 运行中'),
-  stalled: () => red('◌ 已中断'),
-  done: () => green('✓ 完成'),
+  active: () => yellow('● 有更新'),
+  quiet: () => yellow('◌ 无更新'),
+  done: () => green('✓ 已结束'),
   empty: () => gray('· 空'),
 };
 const badge = st => (BADGE[st] || (() => red('✗ ' + st)))();
@@ -294,7 +270,7 @@ function makeRenderer(finals = new Set()) {
         const k = d.reason?.kind;
         const took = header ? dur(e.time - header.createdAt) : '';
         const stats = gray(`  ${took} · ${tools} 次工具调用${errors ? ' · ' : ''}`) + (errors ? red(`${errors} 个错误`) : '');
-        add(['', (k === 'completed' ? green('■ 完成') : red(`■ ${k}`)) + stats, ...(d.reason?.message ? [red('  ' + d.reason.message)] : [])]);
+        add(['', (k === 'completed' ? green('■ 会话结束（待任务验收）') : red(`■ ${k}`)) + stats, ...(d.reason?.message ? [red('  ' + d.reason.message)] : [])]);
         break;
       }
     }
@@ -305,12 +281,14 @@ function makeRenderer(finals = new Set()) {
 function headerLines(s) {
   const title = s.title || '(无标题)';
   const bar = '─'.repeat(Math.max(4, W - 2));
-  const status = s.state === 'empty' ? badge(s.state) : `${badge(s.state)}${gray(` · ${dur((s.state === 'running' ? Date.now() : s.last) - s.created)} · ${s.tools} 次工具调用`)}${s.errors ? gray(' · ') + red(`${s.errors} 个错误`) : ''}`;
+  const status = s.state === 'empty' ? badge(s.state) : `${badge(s.state)}${gray(` · ${dur((['active', 'quiet'].includes(s.state) ? Date.now() : s.last) - s.created)} · ${s.tools} 次工具调用`)}${s.errors ? gray(' · ') + red(`${s.errors} 个错误`) : ''}`;
   return [
     gray('╭' + bar),
     gray('│ ') + bold(cut(title, W - 4)),
     gray('│ ') + gray('项目 ') + pad(path.basename(s.cwd || '?'), 20) + gray(cut(s.cwd, Math.max(10, W - 30))),
     gray('│ ') + gray('会话 ') + cyan(s.id.slice(0, 8)) + gray(`  开始 ${when(s.created)}  `) + status,
+    gray('│ ') + gray(cut(s.usage?.available ? `会话用量：输入 ${s.usage.tokens.uncachedInputTokens} · 输出 ${s.usage.tokens.outputTokens} · 缓存读 ${s.usage.tokens.cacheReadTokens} · 缓存写 ${s.usage.tokens.cacheWriteTokens}${s.usage.missingSamples ? ' · 样本不完整' : ''}` : '会话用量：不可用（不视为零）', W - 4)),
+    ...(['active', 'quiet'].includes(s.state) ? [gray('│ ') + gray(cut('日志状态不能证明进程存活；桥接任务请用 dsb status 核对。', W - 4))] : []),
     gray('╰' + bar),
   ];
 }
@@ -350,9 +328,9 @@ function ls(n = 15) {
   const all = listSessions();
   const rows = all.slice(0, n).map(s => summarize(s));
   if (!rows.length) return console.log(gray('还没有任何 DeepSeek 会话。'));
-  const running = rows.filter(r => r.state === 'running').length;
+  const running = rows.filter(r => r.state === 'active').length;
   console.log();
-  console.log('  ' + bold('DeepSeek 会话') + gray(`  ·  显示 ${rows.length} / 共 ${all.length} 个`) + (running ? gray('  ·  ') + yellow(`${running} 个运行中`) : ''));
+  console.log('  ' + bold('DeepSeek 会话') + gray(`  ·  显示 ${rows.length} / 共 ${all.length} 个`) + (running ? gray('  ·  ') + yellow(`${running} 个最近有更新`) : ''));
   console.log();
   const cols = [['状态', 10], ['ID', 10], ['项目', 18], ['工具', 6], ['更新', 13]];
   const fixed = cols.reduce((a, [, w]) => a + w, 0) + 2;
@@ -367,6 +345,7 @@ function ls(n = 15) {
   }
   console.log();
   console.log(gray('  dsv show <ID>  查看过程    dsv watch  实时跟踪    --full 不截断  --no-reasoning 隐藏思考'));
+  console.log(gray('  状态来自日志；已结束不等于验收通过，无更新不等于中断。桥接任务用 dsb status 查看。'));
   console.log();
 }
 
@@ -430,6 +409,7 @@ function tui() {
     if (!c) { c = { size: -1, offset: 0, events: [], blocks: null, open: new Set() }; cache.set(s.file, c); }
     if (size !== c.size) {
       const buf = fs.readFileSync(s.file);
+      if (buf.length < c.offset) { c.offset = 0; c.events = []; c.blocks = null; c.open.clear(); }
       const { events, end } = decodeFrom(buf, c.offset);
       c.offset = end; c.size = size;
       if (events.length) {
@@ -465,15 +445,15 @@ function tui() {
     sessions = list.map(load).filter(s => s && s.state !== 'empty');
     for (const s of sessions) {
       const before = prevState.get(s.id);
-      if (before === 'running' && s.state !== 'running') {
+      if (['active', 'quiet'].includes(before) && !['active', 'quiet', 'empty'].includes(s.state)) {
         const proj = path.basename(s.cwd || '');
-        flash = { until: Date.now() + 8000, text: s.state === 'done' ? green(`✓ ${s.id.slice(0, 8)} ${proj} 完成了`) : red(`✗ ${s.id.slice(0, 8)} ${proj} ${stripAnsi(badge(s.state))}`) };
+        flash = { until: Date.now() + 8000, text: s.state === 'done' ? green(`✓ ${s.id.slice(0, 8)} ${proj} 会话已结束`) : red(`✗ ${s.id.slice(0, 8)} ${proj} ${stripAnsi(badge(s.state))}`) };
         if (bell) out.write('\x07');
       }
       prevState.set(s.id, s.state);
     }
     if (autoPick && sessions.length) {
-      const pick = sessions.find(s => s.state === 'running') || sessions[0];
+      const pick = sessions.find(s => s.state === 'active') || sessions[0];
       if (pick.id !== selId) select(pick.id);
     }
     if (!sessions.find(s => s.id === selId)) selId = sessions[0]?.id ?? null;
@@ -504,8 +484,8 @@ function tui() {
     return o + ' '.repeat(Math.max(0, w - n)) + '\x1b[0m';
   }
 
-  const icon = s => s.state === 'running' ? yellow(SPIN[frame % SPIN.length]) : s.state === 'done' ? green('✓')
-    : s.state === 'stalled' ? red('◌') : s.state === 'empty' ? gray('·') : red('✗');
+  const icon = s => s.state === 'active' ? yellow(SPIN[frame % SPIN.length]) : s.state === 'done' ? green('✓')
+    : s.state === 'quiet' ? yellow('◌') : s.state === 'empty' ? gray('·') : red('✗');
 
   function listRows(w, h) {
     const rows = [];
@@ -561,8 +541,8 @@ function tui() {
     const cols = out.columns || 100, rowsN = out.rows || 30;
     const split = cols >= 110;
     const bodyH = rowsN - 2;
-    const running = sessions.filter(s => s.state === 'running').length;
-    const title = ` ${bold('DeepSeek 会话')}  ${running ? yellow(`${SPIN[frame % SPIN.length]} ${running} 个运行中`) : gray('空闲')}  ${gray(`· ${sessions.length} 个`)}`;
+    const running = sessions.filter(s => s.state === 'active').length;
+    const title = ` ${bold('DeepSeek 会话')}  ${running ? yellow(`${SPIN[frame % SPIN.length]} ${running} 个最近有更新`) : gray('无近期更新')}  ${gray(`· ${sessions.length} 个`)}`;
     let status = '';
     if (!follow && inDetail()) status = yellow('⏸ 暂停跟随 · G 回到底部') + '   ';
     if (flash && Date.now() < flash.until) status = bold(flash.text) + '   ';

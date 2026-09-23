@@ -1,89 +1,89 @@
 ---
 name: deepseek-delegate
-description: Use when a task or sub-task has a clear spec and a checkable result — file organizing, format conversion, first-draft or boilerplate code, implementing one task of a written plan, writing tests, batch edits, read-only codebase surveys, running a regression/build and reporting, routine work through an MCP server (e.g. an editor or database) — and could be done by the local DeepSeek agent (dsh) instead of Claude to save tokens. Also when the user says "交给 DeepSeek" / "用便宜模型" / "delegate to deepseek".
+description: Delegate bounded coding, investigation, batch processing, or MCP tasks from Claude Code or Codex to the local DeepSeek Harness (dsh) when a brief and targeted verification cost less than doing the work in the parent agent. Consider before extensive source reading, or when the user asks to use DeepSeek or a cheaper model.
 ---
 
 # DeepSeek 委派（dsh headless）
 
-本机装有 DeepSeek Harness CLI（`dsh`，npm 包 `@deepseek-ai/dsh`，模型 deepseek-flash）。它是完整的编码 agent，能读写文件、跑 PowerShell，也能按需加载 MCP server，价格远低于 Claude。**分工：Claude 负责定方案、写 brief、验收和收尾；dsh 负责干活。** dsh 的产出只算初稿，Claude 验收后才能告诉用户完成。
+供 Claude Code 和 Codex 共用。目标是降低完成并验收整个任务的总成本，包括主代理派单、DeepSeek 执行、主代理验收及返工。主代理负责理解用户目标、确定边界和验收；dsh 自行调查、实现并验证。使用本机 `@deepseek-ai/dsh` 的 headless 模式，按需加载 MCP。
 
-## 派不派
+## 何时委派
 
-判断标准：**能写出一份不需要中途沟通的 brief，并且有办法快速验证结果**，就派出去。
+在大量阅读源码或写详细实现之前判断。只要目标可传递、范围明确且可验收，就优先委派能独立推进的工作；不要为了准备 brief，先把待委派的调查或代码生成做完。暂时不适合整体委派的任务，仍可交出有边界的调查、验证或机械步骤。
 
-| 派给 dsh | Claude 自己做 |
+| 适合交给 dsh | 主代理保留的工作 |
 |---|---|
-| 实施计划里的**一个** Task（代码已经写在计划或 spec 里） | 定方案、写计划、跨模块做取舍 |
-| 按参照文件写初版代码、转换器、校验、测试 | 难定位的 bug，并发、性能、安全问题 |
-| 只读调查：读很多文件，把报告写到文件里 | 需求还模糊，需要和用户来回确认 |
-| 跑编译、回归、黄金比对，并按固定格式报告 | 一两行的小改动（写 brief 比自己改还贵） |
-| 批量重命名、格式转换、机械性的批量修改 | 删除重要数据、git 提交或推送、对外发布 |
+| 定位相关文件、梳理调用关系、批量扫描日志，返回带位置的结论 | 澄清需求、跨模块取舍，以及对调查结论作最终判断 |
+| 按目标和现有约定实现一个功能或修复，连同相关测试 | 需要持续讨论的设计、涉及关键安全或数据完整性的决定 |
+| 批量转换、机械修改、运行已知验证流程、范围明确的 MCP 操作 | 一两行即可完成的小改动，以及派单和验收成本更高的任务 |
 
-**规模上限**：一次只派一个计划 Task。实际数据里 5–16 分钟、100–250 次工具调用都能正常完成。指令接近 10K 字、同时改好几个子系统的任务中断过。更大的活先拆开，每个做完就验收，再派下一个。
+不要求已有计划、完整代码或额外插件。已有规格就引用；没有规格就给出可观察的完成条件。难题也可以先委派有边界的证据收集，再由主代理决定下一步。
 
-## 调用
+一次围绕一个可验收的目标组织任务。共享上下文的实现、测试和直接相关修改可以一起做；不要按计划编号或文件数量机械拆分。跨多个独立目标、约束复杂或需要中途决策时再拆分。并行任务应有独立的写入范围，主代理也不要同时修改 dsh 正在处理的文件或 MCP 对象。
 
-```bash
-cd "<项目目录>" && timeout 2700 dsh --profile headless "$(cat "$TEMP/brief-xxx.md")" > "$TEMP/dsh-xxx.out" 2> "$TEMP/dsh-xxx.err"
+## 写简短且自包含的 brief
+
+每次 headless 调用都是新会话，看不到主代理的对话。只传目标、必要上下文、边界和验收方式；现有规格或大段材料给路径，让 dsh 自己读取，不复制完整对话、源码或实现步骤。传递已确认适用的 `AGENTS.md`、`CLAUDE.md` 等约定路径，并在 brief 中写清影响本任务的硬性限制与用户决定；不要假定 dsh 自动继承宿主的指令、插件、MCP 配置或权限。
+
+```text
+【目标】用户需要的行为或调查结论，以及完成条件。
+【上下文】项目根目录；已知的相关入口或参考文件；必须遵守的项目约定。
+【范围】可修改的模块/目录或 MCP 对象；应保留的行为和已有改动；任务特有的限制。
+【验收】相关测试/验证命令或可观察结果；未知时让 dsh 查找并说明采用的验证方法。
+【报告】第一行 RESULT: OK|FAIL|BLOCKED。
+随后简述结论、改动文件/证据位置、验证命令与退出码、未验证项或阻塞原因。
+默认控制在约 15 行，详细结果或长日志写文件并给路径；不要粘贴整份源码或执行过程。
 ```
 
-- **必须后台运行**：Bash 工具加 `run_in_background: true`，做完会通知你。前台 Bash 最多等 10 分钟，超时会把 dsh 杀掉，而大一点的 Task 常常超过 10 分钟。
-- **brief 先写进文件**，放在 `$TEMP` 或项目的 `.superpowers/…` 目录下。长需求可以放在 brief 里，或者在 brief 里写明「先完整阅读 <路径>」。
-- stdout 是最终报告，stderr 是推理过程，出问题时再看。
-- 每次调用都是**全新会话**，不记得之前的内容，brief 必须自包含。dsh 也没法中途问你问题：遇到拿不准的地方，它会停下来写进报告。
-- **需要 MCP 工具时**：先运行 `head -n 4 ~/.dsh/patches/*-mcp.yml`，看已经装了哪些 MCP，以及各自的用途、前提和用法。然后用 `--patch <文件>` 加载需要的那几个，可以写多次。每个文件的「前提」要先确认满足。缺少需要的 MCP 时，用 **dsh-mcp** skill 安装。不需要 MCP 的任务一个都不要加，因为工具定义会让每次请求都多出大量 token。
-- 工作目录要用**短路径**的项目根目录。路径太长时，dsh 会直接以 exit 126 退出。
-- 不要让两个 dsh **同时改同一批文件**。不相关的任务可以并行派出。
+按任务删去无用字段。`OK` 表示约定的验收条件已满足，`FAIL` 表示实现或验证失败，`BLOCKED` 表示缺少必要权限、依赖或决定；未运行的验证应明确注明，不能报告为通过。
 
-## brief 模板
+派单前只做必要的轻量检查：根目录和已给出的入口是否存在、约束与验收是否冲突、工作区有哪些已有改动。缺少精确文件列表时可以给模块范围，由 dsh 定位。实现细节允许自行选择；目标冲突、必须扩大范围或权限不足时返回阻塞原因。
 
-```
-【目标】一句话说清要做成什么。
-【位置】当前目录是 <项目> 根目录。先读：<spec/计划/参照文件的准确路径>
-【要求】
-- 具体规则（代码逐字照抄计划里的代码块 / 模仿 <文件> 的写法 / 数值不能改）
-- 允许执行的命令：<比如 git -c safe.directory='<项目路径>' status/diff（只读）>
-【限制】只改或只新建 <文件列表>；不删除文件；不 git add/commit；不安装依赖。
-  用到 MCP 时：列出它可以调用的工具或操作；能执行任意代码的工具（比如 execute_code）只能跑本指令或计划里给出的代码；构建、发布、删除这类工具不要调用；有状态的对象（场景、文档、数据库）改完要保存，结束时恢复到原来的状态。
-  遇到指令矛盾、文件不存在、要求无法满足：停下来，在报告里写清楚，不要自己变通。
-【完成后】运行 <验证命令>。报告第一行固定写成：
-  RESULT: OK|FAIL|BLOCKED  差异: <无/简述>  原因: <-/简述>
-  然后列出：改动或新建的文件，验证结果，需要 Claude 决定的问题。
-```
+委派不扩大用户授权。默认不让 dsh 提交、推送、发布或执行与任务无关的删除和依赖安装。使用 MCP 时明确目标实例、可执行操作和保存要求；有状态应用只恢复临时设置，保留任务要求的成果。brief 中的限制是任务约定，不能替代实际沙箱和 MCP 权限。
 
-派出去之前自查一遍：
-1. brief 里的每个路径都实际存在。「not found」大多是 brief 写错了路径。
-2. 要求和限制之间没有矛盾。比如一边写「不执行 git」，一边又要求「先用 git diff 看改动」。
-3. 需要跑沙箱外命令的步骤，要么交给 Claude 自己做，要么在 brief 里说明跳过。
+## 调用与等待
 
-## 常见报错
+将 brief 以 UTF-8 写到临时目录或项目内适合放任务材料的位置。优先使用本包的 `dsb` 启动器：它保存原始要求、Git 状态基线、报告和退出码，并为同一仓库加执行锁。`run` / `retry` 持续运行直到作业结束，由宿主保留进程会话：
 
-| 报错 | 原因 | 怎么处理 |
-|---|---|---|
-| `sandbox escalation to "danger-full-access" requires approval, but no approval channel is available` | 命令要访问工作区外面（比如调用外部脚本、写系统目录）。headless 模式没法弹出审批，所以直接拒绝 | 把这一步留给 Claude 自己跑。只有用户明确同意时，才能用 `DSH_PERMISSION_MODE=danger-full-access` 关掉沙箱 |
-| `detected dubious ownership` | 沙箱用受限令牌运行 git | 在 brief 里写明要用 `git -c safe.directory='<路径>' …` |
-| `cannot modify …: file has not been read` | dsh 的写入规则要求先读后写 | 它通常会自己修复。brief 里可以提示「覆盖已有文件前先读一遍」 |
-| `ReplaceFileW EIO (Win32 1175)` / rg `IO error` | 文件被编辑器、IDE 或其他程序暂时占用 | 属于偶发错误，重试即可。验收时要确认这个文件最后确实写进去了 |
-| `cannot read …: not found` | brief 里的路径写错了，或者文件已经被移动 | 派之前核对路径 |
-| exit 126 `path longer than allowed` | 工作目录路径太长 | 换短路径 |
+| 宿主 | 启动与等待 |
+|---|---|
+| Claude Code | 使用 Bash 工具的 `run_in_background: true`，记录后台任务 ID，等待完成通知或按需读取任务结果。 |
+| Codex | 用当前可用的命令执行工具运行。若提供 `exec_command` / `write_stdin`，设置有界 `yield_time_ms`，保存返回的 `session_id`，再用 `write_stdin` 等待和读取后续结果；不要把 Claude 的后台参数传给 Codex。 |
 
-## 验收（必须做）
+同时记录 `dsb` 输出的作业 ID；它不同于宿主的会话 ID。以当前工具实际支持的接口为准，缺少后台能力时使用有界同步执行；不要为了脱离宿主创建无人管理的进程。执行需要的文件、网络或子进程权限通过宿主现有授权流程处理。
 
-1. 派之前记下 `git status`。做完后用 `git status` 和 `git diff` 看**实际改动**，不要只信 dsh 的自述。
-2. 先看报告第一行。OK 也要抽查，FAIL 和 BLOCKED 要读完整报告。报告很长时，如果装了 `local-sieve` skill，可以先用它筛一遍。
-3. 自己跑一次验证：编译、测试、脚本试跑。用到 MCP 的任务，Claude 再用自己的同一个 MCP，或者只读查询，核对一下最终状态。
-4. 小问题 Claude 直接修。大问题带着具体错误重新派一次，最多重派 2 次，还不行就 Claude 自己做。
-5. 向用户汇报时，说清楚哪些是 dsh 做的，Claude 验证或修正了什么。
+示例（`2700` 秒为示例上限，按任务调整；需要 MCP 时重复添加 `--patch <文件>`）：
 
-## 中断与续做
-
-dsh 被杀掉或者卡住时（`dsv ls` 里显示「已中断」），**不要从头重派**。重新派一次，在 brief 最前面加上：
-
-```
-【续做说明】上次执行到一半中断了，工作区已有部分改动：<git status 列出的文件>。
-先用 git diff 和读文件弄清哪些已经完成、完成得对不对，只补完剩下的部分，并修正不符合要求的地方，不要推倒重来。下面是原任务的完整要求。
+```text
+dsb run --cwd "<项目目录>" --brief "<brief 文件>" --timeout 2700
 ```
 
-## 查看 dsh 在做什么
+- 等待宿主完成通知或用会话工具有界等待，不高频轮询。`dsb` 只返回启动记录和有长度上限的结果；完整报告、推理和错误日志留在返回的路径。失败时按需读取相关片段，不把全过程传回主代理。
+- `dsb status <ID>` 查询进程记录，`dsb result <ID>` 获取短报告。`completed` 仅表示进程退出码为 0；`reportedResult` 是模型自述，`acceptance` 才是主代理记录的验收结果。
+- 同仓库的 `dsb` 作业串行执行；独立工作区可以并行。锁不能阻止主代理、IDE 或其他启动方式的写入，主代理仍需协调任务范围。没有启动器时可按 [故障与恢复](references/troubleshooting.md) 中的直接调用方式执行。
+- 需要 MCP 时读取 `~/.dsh/patches/*-mcp.yml` 的前 4 行，确认前提并只加载需要的 `--patch <文件>`，可重复此参数。不需要 MCP 就不加载；已有验证结果且配置未变时不要重复安装或做连通性测试。缺少配置时使用同包的 `dsh-mcp` skill。
+- 使用正确的项目根目录；遇到长路径、权限或文件占用问题时，按需读 [故障与恢复](references/troubleshooting.md)，不要临时改变项目范围或关闭沙箱来凑通调用。
 
-`dsv show latest --no-reasoning`（或 `dsv show <id前缀>`）可以看 dsh 的完整过程：调用了哪些工具、结果是什么、哪里报了错。`dsv ls` 列出会话和状态。用户在自己的终端里直接运行 `dsv`，会打开一个实时的 TUI。Claude 的 Bash 里没有 TTY，运行 `dsv` 只会得到普通列表，不会卡住。
+## 验收与返工
+
+先读短报告，再独立核对与验收条件相关的证据。Git 项目比较派单前后的状态与相关 diff；其他项目检查对应文件或 MCP 状态。已有用户改动不能算作 dsh 的产出。
+
+- 行为修改：检查关键 diff，并运行最小的相关测试或复现检查；只有影响范围或失败证据需要时才扩大验证。
+- 机械转换：核对数量、结构、约束和代表性样本；可确定的规则优先用脚本验证。
+- 调查：抽查报告引用的文件位置与结论，不重复通读整个仓库。
+- 运行测试/构建：核对实际命令、退出码和日志/产物；没有新改动或证据缺口时不无条件重跑整套流程。
+- MCP 操作：用相关只读查询核对最终状态。
+
+验收后执行 `dsb review <ID> --verdict accepted --note "实际验证的证据"`；未通过用 `rework` 或 `blocked`。不要仅凭 `OK` 标记通过。进程失败或报告非 OK 的作业不能标为 accepted；主代理自行修复后的最终结果应单独说明，不算作该次委派通过。
+
+小修正由主代理直接处理。返工有明确修复范围时，将具体失败证据写入文件，执行 `dsb retry <ID> --feedback <文件>` 并按同一宿主方式等待；启动器沿用原始目标、工作目录和 MCP 配置，生成关联的新会话。反馈只补充证据和待办；用户改变目标或 MCP 配置变化时，重新准备完整 brief 创建新任务，不通过返工偷偷改变原始范围。
+
+相同失败重试一次仍无新进展时停止重复派单，改由主代理诊断或处理阻塞；不要为了坚持委派而继续消耗。续做不会恢复旧会话的全部上下文，仍须指向现有成果和相关证据。
+
+确认任务确实退出后才能重派。需要停止时用 `dsb cancel <ID>`，接受取消请求不等于已退出；`unknown` 或 `cleanup_failed` 时先处理遗留进程，不重派。dsv 的“无更新”不能证明中断。中断后的部分改动可能仍然有效，先核对现状再续做，详见 [故障与恢复](references/troubleshooting.md)。
+
+## 按需查看过程
+
+用户可以在真实终端运行 `dsv` 查看 TUI，不增加主代理的上下文。主代理只在报告不足或排查失败时使用 `dsv ls` 和 `dsv show <ID> --no-reasoning`，先限定输出到相关部分。并发或有其他会话时按项目、任务和时间确认 ID，不盲用 `latest`。
+
+向用户汇报完成结果、实际验证和剩余限制，说明委派承担的工作。`dsb stats` 汇总任务、返工、验收和已观测会话用量；缺失用量不当作零，父会话用量不冒充完整账单。没有对照用量数据时，不宣称节省了具体金额或比例。

@@ -1,108 +1,48 @@
 ---
 name: dsh-mcp
-description: Use when the user wants to install, add, import, list, update, fix or uninstall an MCP server for the DeepSeek agent (dsh / DeepSeek Harness), or when a dsh task needs mcp__<name>__ tools that aren't configured, or dsh fails to start with "invalid config" from @deepseek-ai/dsh-mcp-client.
+description: Install, import, inspect, update, or remove MCP server patches for DeepSeek Harness (dsh), including selected servers from Claude Code or Codex, or diagnose a missing MCP connection or invalid configuration. Reuse working patches for delegation.
 ---
 
-# 给 dsh 安装 / 卸载 MCP
+# 管理 dsh 的 MCP
 
-dsh 自带 MCP 客户端插件 `@deepseek-ai/dsh-mcp-client`。**一个 MCP server 对应 `~/.dsh/patches/` 下的一个 patch 文件。** 调用 dsh 时加 `--patch <文件>` 才会加载，这个 server 的工具以 `mcp__<serverName>__<tool>` 的名字出现。不加就不加载：每个 server 的工具定义都会让每次请求多出 token，所以按需加载。
+供 Claude Code 和 Codex 共用。一个 MCP server 对应 `~/.dsh/patches/<name>-mcp.yml`，通过 `dsb run --patch <文件>` 或 `dsh --profile headless --patch <文件>` 按需加载。宿主可用的 MCP 不会自动出现在 dsh 中；只加载本任务需要的 server，避免额外工具定义和启动开销。
 
-## 列出已安装的
+## 列出与复用
 
-```bash
-head -n 4 ~/.dsh/patches/*-mcp.yml
-```
+读取 patch 的前 4 行即可了解名称、用途、前提和用法：
 
-每个文件开头 4 行注释的格式是固定的（见下面的模板），deepseek-delegate skill 也靠这几行判断有哪些 MCP 可以用。
+在 Bash 中可用 `head -n 4 ~/.dsh/patches/*-mcp.yml`；PowerShell 中用 `Get-ChildItem -Path ~/.dsh/patches -Filter '*-mcp.yml' | ForEach-Object { Get-Content -LiteralPath $_.FullName -TotalCount 4 }`。按实际 shell 选择命令。
 
-## 安装
+没有匹配文件只表示尚未配置。列出配置时不读取或打印整个凭据环境。配置没有变化、验证结果可用且运行前提满足时，直接复用，不为每次委派重新安装或测试。
 
-1. **弄清 server 的启动方式**：
-   - 用户在别的客户端里配过的话，直接照搬（见下方「从现有配置导入」）。
-   - 否则看这个 server 的官方文档：是 stdio（启动一个本地命令）还是 HTTP（连一个 URL）、需要哪些环境变量、有什么前提条件。
-2. **写 patch 文件** `~/.dsh/patches/<name>-mcp.yml`，照下面的模板填。
-3. **验证**，三步都要做（见「验证」）。
-4. 告诉用户：装在哪个文件、怎么用（`--patch …`）、运行前提、需要用户自己设置的环境变量。
+## 安装或导入
 
-### 模板
+1. 从用户现有配置或 server 官方说明确定启动方式和依赖。只导入指定 server，不复制整个客户端配置。
+2. 按 [patch 模板与字段映射](references/configuration.md) 写配置；只有安装、更新或排错需要读取该参考。
+3. 检查命令、依赖、目标应用/实例及必需环境变量是否就绪。检查变量只报告名称和是否设置，不显示值。保留与本次目标匹配的项目参数；目标不明确时先澄清，不擅自删除项目绑定。
+4. 进行下面的验证，报告 patch 路径、使用方法、前提及需要用户设置的变量。
 
-```yaml
-# dsh-mcp: <name>
-# 用途: <一句话：这个 MCP 能做什么>
-# 前提: <运行前要满足的条件；没有就写 无>
-# 用法: dsh --profile headless --patch ~/.dsh/patches/<name>-mcp.yml "<任务>"
-- insert:
-    - id: mcp-<name>
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: <name>              # [A-Za-z0-9_-]{1,32}，工具名前缀，所有已装的里不能重复
-        transport: stdio                # stdio | streamable-http
-        # ── stdio ──
-        command: npx                    # npx / uvx / node / 绝对路径都行（Windows 下 .cmd 也能直接启动）
-        args: ['-y', '<package>@<version>']
-        env:                            # 可选，显式传给子进程的变量
-          API_TOKEN: !!js process.env.API_TOKEN ?? ''
-        # cwd: <工作目录>
-        # ── streamable-http ──
-        # url: http://127.0.0.1:3000/mcp
-        # headers: { Authorization: !!js '`Bearer ${process.env.MCP_TOKEN ?? ""}`' }
-        toolCallTimeoutMs: 120000       # 默认 60000；构建、编辑器这类慢工具要调大
-        failOnStartupError: true        # 连不上就直接报错，不要悄悄少了一批工具
-```
+有凭据的字段使用环境变量引用，不写入明文。`?? ''` 只避免 undefined 导致配置解析失败，不代表空凭据能通过认证；必需凭据未设置时先报告缺失，不反复启动模型尝试。
 
-其他可选字段：`reconnect.enabled / initialDelayMs / maxDelayMs / maxAttempts`（默认会自动重连）。完整字段说明见 dsh 安装目录下的 `node_modules/@deepseek-ai/dsh-mcp-client/README.md`。
+## 用最少调用验证
 
-### 环境变量和凭据（最容易出错的地方）
+先用 `dsh --profile headless --patch <文件> --dump-config` 在本地验证配置可以组合，只报告是否成功和相关的脱敏错误，不将整份配置输出到对话。
 
-- 名字里带 `KEY` / `PASSWORD` / `SECRET` / `TOKEN` 的变量，以及所有 `DSH_*` 变量，**不会被 MCP 子进程继承**。其他变量（`PATH` 这类）会正常继承。要转发凭据，必须在 `env` 里显式写出来。
-- **显式转发时一定要写 `?? ''`**。如果写 `!!js process.env.X`，而 X 没有设置，值就是 undefined，**整个 dsh 会以 `invalid config` 启动失败**，连不用这个 MCP 的任务也跑不了。
-- **不要把 token、密码明文写进 patch。** 从别的配置导入时遇到明文凭据，不要复制，改成 `!!js process.env.<NAME> ?? ''`，然后告诉用户自己设置这个变量（`setx <NAME> …`，设置后要新开终端才生效）。
+再验证连接与工具注册。如果已有无需模型调用的 MCP 客户端或探测工具，优先复用它。否则在一次有超时上限的 headless 调用中，让 dsh 确认指定前缀工具存在，并调用一个与目标匹配、无需额外外部动作的只读工具；返回工具名和简短结果证据。前提未满足时不调用，不能拿模型列出的名称代替真实调用结果。
 
-### 从现有配置导入
+一次验证同时覆盖发现与只读调用，不分成两次付费模型调用。工具错误、无工具、权限不足分别报告；未经实际调用验证时明确说明，不能标记为已验证。将验证时间、server/patch 版本及简短结果记在 patch 的额外注释中（不改变前四行）；后续配置或依赖发生变化时再验证。
 
-| 来源 | 在哪里找 |
-|---|---|
-| Claude Code | `claude mcp list` / `claude mcp get <name>`；`~/.claude.json` 的 `mcpServers`，以及其中 `projects.<路径>.mcpServers`；项目根目录的 `.mcp.json` |
-| Codex | `~/.codex/config.toml` 里的 `[mcp_servers.<name>]` |
-| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` 的 `mcpServers` |
+## 更新与卸载
 
-字段对照：
-- `command` / `args` / `env` / `cwd` 原样照搬。
-- `type: "http"` 或 `url = …` → `transport: streamable-http` + `url` + `headers`。
-- Codex 的 `env_vars = ["X"]` → `env: { X: !!js process.env.X ?? '' }`。
-- `tool_timeout_sec` → `toolCallTimeoutMs`（×1000）。`startup_timeout_sec` 没有对应字段，丢掉即可。
-- 只针对某一个项目的参数（比如指定默认项目或实例），先问用户：保留，还是去掉让它通用。
+更新前检查现有 patch；只改所需字段，保留用户设置。尽量保持 `serverName`，它决定工具名称前缀。更新后重新验证。
 
-## 验证（安装或修改后都要做）
+用户明确要求卸载指定 MCP 时，检查该 patch、备份后删除，并用 `rg` 检查当前相关项目的引用，提醒需要调整的 brief。对象不明确时再询问，不重复请求已经给出的卸载授权。不顺带卸载 npm/uv 包、删除凭据或终止共享服务。
 
-在**短路径**目录里运行（dsh 在长路径下会直接退出）：
+## 常见问题
 
-```bash
-# 1. 配置能加载：输出里要能看到这一段
-cd "$TEMP" && dsh --profile headless --patch ~/.dsh/patches/<name>-mcp.yml --dump-config 2>&1 | grep -A4 "id: mcp-<name>"
-# 2. 真的能连上：exit 0，并且工具数大于 0
-cd "$TEMP" && timeout 300 dsh --profile headless --patch ~/.dsh/patches/<name>-mcp.yml "列出所有 mcp__<name>__ 开头的工具名，不要调用任何工具。第一行写：RESULT: OK 工具数: <N>"
-```
+- `invalid config`：检查字段类型、未设置环境变量，以及 patch 是否只加载了本任务需要的 server。
+- 启动失败：检查启动命令、依赖、应用是否打开、端口或 URL。
+- 连接成功但没有工具：读取 server 的相关错误日志，不让模型反复猜工具名。
+- 单次工具超时：先只读检查操作结果，尤其是有状态的编辑器；不要盲目重复可能已完成的操作。
 
-3. 满足前提条件后，让它调用一个**只读**工具，确认返回的是真实数据。
-
-失败怎么排查：
-- exit 1，stderr 里有 `invalid config`：多半是转发了一个没设置的变量，或者字段写错了。
-- exit 1，报启动错误：命令找不到、依赖没装、服务没启动。
-- exit 0 但工具数是 0：server 启动了但没有注册任何工具，去看这个 server 自己的日志。
-
-## 更新
-
-直接改 patch 文件，比如换版本号、改参数，然后重新验证。`serverName` 尽量不要改，改了之后工具名就变了，已经写好的 brief 和计划里用到的旧工具名都会失效。
-
-## 卸载
-
-1. 确认要删哪个：`head -n 4 ~/.dsh/patches/<name>-mcp.yml`。
-2. **先征得用户同意**，再删除 `~/.dsh/patches/<name>-mcp.yml`。
-3. 在项目里搜一下还有没有引用：`grep -rn "<name>-mcp.yml" .`。有的话，提醒用户那些 brief 或计划需要更新。
-
-server 本身安装的依赖（npm 包、uv 缓存、服务进程）不在 dsh 管理范围内，要不要清理由用户决定。
-
-## 一直加载（不推荐）
-
-每次都写 `--patch` 嫌麻烦的话，可以建一个自定义 profile：`dsh --profile <名字> --from-default-profile headless`，把 insert 写进 `~/.dsh/profiles/<名字>/cordis.patch.yml`，以后用 `--profile <名字>` 调用。代价是这个 profile 下的所有任务都会带上这些工具定义，每次请求都更贵。
+如需固定组合可以建立自定义 profile；一般优先复用按需 patch。只在实际任务需要时加载 MCP，缓存折扣和总成本以实际用量为准。
