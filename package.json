@@ -1,0 +1,26 @@
+{
+  "name": "claude-deepseek-bridge",
+  "version": "0.1.0",
+  "description": "Let Claude Code delegate well-specified tasks to the local DeepSeek Harness agent (dsh): delegation skill, MCP install/uninstall skill for dsh, and a TUI session viewer (dsv).",
+  "private": true,
+  "license": "LGPL-2.1-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XiaoNetwork-Astral/claude-deepseek-bridge.git"
+  },
+  "type": "module",
+  "bin": {
+    "dsv": "bin/dsv.mjs"
+  },
+  "files": [
+    "bin",
+    "skill",
+    "scripts"
+  ],
+  "engines": {
+    "node": ">=23.8"
+  },
+  "scripts": {
+    "check": "node --check bin/dsv.mjs"
+  }
+}
